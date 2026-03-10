@@ -23,8 +23,10 @@ Telegram 消息 -> OpenClaw 路由到 agent
 组件：
 - `chat_dynamics.default.json`：全局行为参数
 - `agents/*.yaml`：角色基线与覆盖参数
+- `scripts/interest_classifier.py`：兴趣判定层（keyword/hybrid/llm-stub）
 - `scripts/dynamics_gate.py`：状态机 + 概率决策
 - `state/dynamics.db`：运行态（desire、事件去重）
+- `logs/*.jsonl`：决策/执行/指标日志
 
 ---
 

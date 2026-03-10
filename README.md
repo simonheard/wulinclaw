@@ -10,11 +10,13 @@
 
 - `chat_dynamics.default.json`：全局动力学参数（管理员统一控制）
 - `agents/*.yaml`：角色基线（人设、兴趣、override）
+- `scripts/interest_classifier.py`：兴趣判定层（keyword/hybrid/llm-stub）
 - `scripts/dynamics_gate.py`：统一决策与状态更新脚本（概率/欲望不交给 agent 算）
-- `scripts/simulate.py`：快速收敛模拟测试
+- `scripts/simulate.py`：快速收敛模拟测试 + 日志产出
 - `docs/INTEGRATION.md`：接入说明
 - `docs/DESIGN.md`：完整设计文档（架构/规则/边界）
 - `docs/PARAM_TUNING.md`：调参速查
+- `docs/LOGGING.md`：日志规范与排障
 - `docs/MISSING_CHECKLIST.md`：落地前缺漏清单
 
 ## alias 映射

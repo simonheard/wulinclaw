@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
 import argparse
+import hashlib
 import json
 import random
 import sqlite3
+import subprocess
 import time
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict
 
 import yaml
-
 
 ROOT = Path(__file__).resolve().parents[1]
 DB_PATH = ROOT / "state" / "dynamics.db"
 GLOBAL_CFG_PATH = ROOT / "chat_dynamics.default.json"
 AGENTS_DIR = ROOT / "agents"
+LOG_DIR = ROOT / "logs"
+INTEREST_CLASSIFIER = ROOT / "scripts" / "interest_classifier.py"
 
 
 def ensure_db(conn: sqlite3.Connection):
@@ -39,6 +42,17 @@ def ensure_db(conn: sqlite3.Connection):
     conn.commit()
 
 
+def append_jsonl(path: Path, record: dict):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def cfg_hash(cfg: dict) -> str:
+    raw = json.dumps(cfg, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()[:12]
+
+
 def clamp(v: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, v))
 
@@ -58,8 +72,7 @@ def load_global_cfg(global_cfg: Path) -> dict:
 
 
 def load_agent_profile(agent_id: str, agents_dir: Path) -> dict:
-    files = list(agents_dir.glob("*.yaml"))
-    for f in files:
+    for f in agents_dir.glob("*.yaml"):
         data = yaml.safe_load(f.read_text(encoding="utf-8")) or {}
         if data.get("id") == agent_id:
             return data
@@ -70,15 +83,24 @@ def effective_cfg(global_cfg: dict, agent_profile: dict) -> dict:
     return deep_merge(global_cfg, agent_profile.get("dynamics_override", {}))
 
 
-def match_interest(agent_profile: dict, text: str) -> str:
-    text_l = text.lower()
-    interests = agent_profile.get("interests", {})
-    for lvl in ("high", "mid", "low"):
-        kws = interests.get(lvl, []) or []
-        for kw in kws:
-            if str(kw).lower() in text_l:
-                return lvl
-    return "low"
+def classify_interest(args, agent_id: str, text: str):
+    if args.interest_level:
+        return {"level": args.interest_level, "confidence": 1.0, "method": "manual"}
+
+    cmd = [
+        "python3",
+        str(INTEREST_CLASSIFIER),
+        "--agent",
+        agent_id,
+        "--text",
+        text,
+        "--mode",
+        args.interest_mode,
+        "--agents-dir",
+        args.agents_dir,
+    ]
+    out = subprocess.check_output(cmd, text=True)
+    return json.loads(out)
 
 
 def get_desire(conn: sqlite3.Connection, agent_id: str) -> float:
@@ -125,10 +147,23 @@ def is_seen(conn: sqlite3.Connection, event_id: str, agent_id: str, kind: str) -
     return row is not None
 
 
+def log_decision(args, payload: dict):
+    append_jsonl(Path(args.log_dir) / "decision.log.jsonl", payload)
+
+
+def log_speak(args, payload: dict):
+    append_jsonl(Path(args.log_dir) / "speak.log.jsonl", payload)
+
+
+def log_metric(args, payload: dict):
+    append_jsonl(Path(args.log_dir) / "metrics.log.jsonl", payload)
+
+
 def decide(args):
     global_cfg = load_global_cfg(Path(args.global_cfg))
     profile = load_agent_profile(args.agent, Path(args.agents_dir))
     cfg = effective_cfg(global_cfg, profile)
+    cfg_sig = cfg_hash(cfg)
 
     dbp = Path(args.db)
     dbp.parent.mkdir(parents=True, exist_ok=True)
@@ -139,7 +174,8 @@ def decide(args):
     clamp_min = cfg.get("clamp", {}).get("min", 0)
     clamp_max = cfg.get("clamp", {}).get("max", 1)
 
-    interest = args.interest_level or match_interest(profile, args.text)
+    interest_meta = classify_interest(args, args.agent, args.text)
+    interest = interest_meta["level"]
 
     conn.execute("BEGIN IMMEDIATE")
     desire_before = get_desire(conn, args.agent)
@@ -148,7 +184,6 @@ def decide(args):
 
     if args.speaker_type == "user":
         if args.event_id and not is_seen(conn, args.event_id, args.agent, "user_recover"):
-            # cold start
             cold = cfg.get("cold_start", {})
             if cold.get("enabled", True):
                 all_des = get_all_desires(conn)
@@ -162,33 +197,50 @@ def decide(args):
                     reasons.append("cold_start_boost")
 
             rec_map = cfg.get("recover_by_user", {})
-            desire += float(rec_map.get(f"{interest}_interest", 0.06))
-            reasons.append(f"recover_user:{interest}")
+            delta = float(rec_map.get(f"{interest}_interest", 0.06))
+            desire += delta
+            reasons.append(f"recover_user:{interest}:{delta}")
             mark_seen(conn, args.event_id, args.agent, "user_recover")
 
     elif args.speaker_type == "bot":
         if args.speaker_agent and args.speaker_agent == args.agent:
-            # self-ignore
             conn.execute("COMMIT")
-            print(json.dumps({
+            resp = {
                 "allow": False,
                 "reason": "self_ignore",
                 "interest": interest,
-                "desire_before": desire_before,
-                "desire_after": desire_before,
+                "interest_meta": interest_meta,
+                "desire_before": round(desire_before, 4),
+                "desire_after": round(desire_before, 4),
                 "p": 0.0,
-            }, ensure_ascii=False))
+            }
+            log_decision(
+                args,
+                {
+                    "ts": time.time(),
+                    "event_id": args.event_id,
+                    "chat_id": args.chat_id,
+                    "message_id": args.message_id,
+                    "agent_id": args.agent,
+                    "speaker_type": args.speaker_type,
+                    "speaker_agent": args.speaker_agent,
+                    "text": args.text,
+                    "cfg_hash": cfg_sig,
+                    **resp,
+                },
+            )
+            print(json.dumps(resp, ensure_ascii=False))
             return
 
         if args.event_id and not is_seen(conn, args.event_id, args.agent, "bot_passive_drop"):
             drop_other = cfg.get("drop_other_speak", {})
-            desire -= float(drop_other.get(f"{interest}_interest", 0.04))
-            reasons.append(f"drop_other:{interest}")
+            delta = float(drop_other.get(f"{interest}_interest", 0.04))
+            desire -= delta
+            reasons.append(f"drop_other:{interest}:{delta}")
             mark_seen(conn, args.event_id, args.agent, "bot_passive_drop")
 
     desire = clamp(desire, clamp_min, clamp_max)
-    p = float(cfg.get("global_pace", 0.62)) * desire
-    p = clamp(p, 0.0, 1.0)
+    p = clamp(float(cfg.get("global_pace", 0.62)) * desire, 0.0, 1.0)
 
     allow = False
     if desire >= float(cfg.get("desire_min_to_speak", 0.12)):
@@ -198,14 +250,46 @@ def decide(args):
     set_desire(conn, args.agent, desire)
     conn.execute("COMMIT")
 
-    print(json.dumps({
+    resp = {
         "allow": allow,
         "reason": ",".join(reasons) if reasons else "none",
         "interest": interest,
+        "interest_meta": interest_meta,
         "desire_before": round(desire_before, 4),
         "desire_after": round(desire, 4),
         "p": round(p, 4),
-    }, ensure_ascii=False))
+    }
+
+    log_decision(
+        args,
+        {
+            "ts": time.time(),
+            "event_id": args.event_id,
+            "chat_id": args.chat_id,
+            "message_id": args.message_id,
+            "agent_id": args.agent,
+            "speaker_type": args.speaker_type,
+            "speaker_agent": args.speaker_agent,
+            "text": args.text,
+            "cfg_hash": cfg_sig,
+            **resp,
+        },
+    )
+    log_metric(
+        args,
+        {
+            "ts": time.time(),
+            "kind": "decide",
+            "agent_id": args.agent,
+            "allow": allow,
+            "speaker_type": args.speaker_type,
+            "interest": interest,
+            "desire_after": round(desire, 4),
+            "p": round(p, 4),
+        },
+    )
+
+    print(json.dumps(resp, ensure_ascii=False))
 
 
 def apply_speak(args):
@@ -228,25 +312,62 @@ def apply_speak(args):
     if args.event_id and is_seen(conn, args.event_id, args.agent, "self_speak_drop"):
         desire = get_desire(conn, args.agent)
         conn.execute("COMMIT")
-        print(json.dumps({"ok": True, "dedup": True, "desire": round(desire, 4)}, ensure_ascii=False))
+        resp = {"ok": True, "dedup": True, "desire": round(desire, 4)}
+        log_speak(
+            args,
+            {
+                "ts": time.time(),
+                "event_id": args.event_id,
+                "chat_id": args.chat_id,
+                "message_id": args.message_id,
+                "agent_id": args.agent,
+                "interest": interest,
+                **resp,
+            },
+        )
+        print(json.dumps(resp, ensure_ascii=False))
         return
 
     desire_before = get_desire(conn, args.agent)
     drop_self = cfg.get("drop_self_speak", {})
-    desire = desire_before - float(drop_self.get(f"{interest}_interest", 0.11))
-    desire = clamp(desire, clamp_min, clamp_max)
+    delta = float(drop_self.get(f"{interest}_interest", 0.11))
+    desire = clamp(desire_before - delta, clamp_min, clamp_max)
     set_desire(conn, args.agent, desire)
 
     if args.event_id:
         mark_seen(conn, args.event_id, args.agent, "self_speak_drop")
 
     conn.execute("COMMIT")
-    print(json.dumps({
+    resp = {
         "ok": True,
         "desire_before": round(desire_before, 4),
         "desire_after": round(desire, 4),
         "interest": interest,
-    }, ensure_ascii=False))
+        "drop_self": delta,
+    }
+    log_speak(
+        args,
+        {
+            "ts": time.time(),
+            "event_id": args.event_id,
+            "chat_id": args.chat_id,
+            "message_id": args.message_id,
+            "agent_id": args.agent,
+            **resp,
+        },
+    )
+    log_metric(
+        args,
+        {
+            "ts": time.time(),
+            "kind": "speak",
+            "agent_id": args.agent,
+            "interest": interest,
+            "desire_after": round(desire, 4),
+            "drop_self": delta,
+        },
+    )
+    print(json.dumps(resp, ensure_ascii=False))
 
 
 def status(args):
@@ -262,6 +383,10 @@ def main():
     p.add_argument("--db", default=str(DB_PATH))
     p.add_argument("--global-cfg", default=str(GLOBAL_CFG_PATH))
     p.add_argument("--agents-dir", default=str(AGENTS_DIR))
+    p.add_argument("--log-dir", default=str(LOG_DIR))
+    p.add_argument("--interest-mode", choices=["keyword", "llm", "hybrid"], default="hybrid")
+    p.add_argument("--chat-id", default="")
+    p.add_argument("--message-id", default="")
 
     sub = p.add_subparsers(dest="cmd", required=True)
 
@@ -279,7 +404,7 @@ def main():
     s.add_argument("--interest-level", choices=["high", "mid", "low"], default="mid")
     s.add_argument("--event-id", default="")
 
-    st = sub.add_parser("status")
+    sub.add_parser("status")
 
     args = p.parse_args()
     if args.cmd == "decide":

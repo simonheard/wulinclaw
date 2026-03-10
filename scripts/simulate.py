@@ -7,6 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DB = ROOT / "state" / "sim.db"
+LOG_DIR = ROOT / "logs" / "sim"
 GATE = ROOT / "scripts" / "dynamics_gate.py"
 
 AGENTS = ["xiaobai", "xiaohong", "xiaolv", "xiaozong", "xiaolan", "xiaozi"]
@@ -22,7 +23,7 @@ def decide(agent, speaker_type, speaker_agent, event_id, text):
     seed_src = f"{agent}|{speaker_type}|{speaker_agent}|{event_id}".encode("utf-8")
     seed = int(hashlib.sha256(seed_src).hexdigest()[:8], 16)
     cmd = [
-        "python3", str(GATE), "--db", str(DB), "decide",
+        "python3", str(GATE), "--db", str(DB), "--log-dir", str(LOG_DIR), "--chat-id", "sim-chat", "--message-id", event_id, "decide",
         "--agent", agent,
         "--speaker-type", speaker_type,
         "--speaker-agent", speaker_agent,
@@ -35,7 +36,7 @@ def decide(agent, speaker_type, speaker_agent, event_id, text):
 
 def speak(agent, interest, event_id):
     cmd = [
-        "python3", str(GATE), "--db", str(DB), "speak",
+        "python3", str(GATE), "--db", str(DB), "--log-dir", str(LOG_DIR), "--chat-id", "sim-chat", "--message-id", event_id, "speak",
         "--agent", agent,
         "--interest-level", interest,
         "--event-id", event_id,
@@ -58,8 +59,11 @@ def classify_interest(text):
 
 def main():
     DB.parent.mkdir(parents=True, exist_ok=True)
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
     if DB.exists():
         DB.unlink()
+    for f in LOG_DIR.glob("*.jsonl"):
+        f.unlink()
 
     random.seed(42)
     event_num = 0
@@ -113,12 +117,22 @@ def main():
     tail_hops = user_hops[-3:] if len(user_hops) >= 3 else user_hops
     converged = (max(tail_hops) <= 3) and (avg_desire < 0.3)
 
+    def count_lines(p):
+        return sum(1 for _ in p.open("r", encoding="utf-8")) if p.exists() else 0
+
+    log_counts = {
+        "decision": count_lines(LOG_DIR / "decision.log.jsonl"),
+        "speak": count_lines(LOG_DIR / "speak.log.jsonl"),
+        "metrics": count_lines(LOG_DIR / "metrics.log.jsonl"),
+    }
+
     print(json.dumps({
         "converged": converged,
         "avg_desire": round(avg_desire, 4),
         "user_hops": user_hops,
         "desires": desires,
         "events": len(transcript),
+        "log_counts": log_counts,
         "tail": transcript[-20:],
     }, ensure_ascii=False, indent=2))
 

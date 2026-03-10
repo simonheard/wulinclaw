@@ -18,6 +18,11 @@ python3 scripts/dynamics_gate.py decide \
 - `allow=true` 才允许 agent 继续生成回复
 - `allow=false` 直接 NO_REPLY
 
+默认会写日志到 `logs/`：
+- `decision.log.jsonl`
+- `speak.log.jsonl`
+- `metrics.log.jsonl`
+
 > 机器人消息用 `--speaker-type bot --speaker-agent <发言bot的agent_id>`。
 
 ### 2) agent 真的发出去后
@@ -35,6 +40,19 @@ python3 scripts/dynamics_gate.py speak \
 
 ```bash
 python3 scripts/dynamics_gate.py status
+```
+
+## 兴趣判定模式
+
+`dynamics_gate` 支持：
+- `--interest-mode keyword`
+- `--interest-mode hybrid`（默认）
+- `--interest-mode llm`（当前为 stub，接口已预留）
+
+独立调试：
+
+```bash
+python3 scripts/interest_classifier.py --agent xiaobai --text "今天江湖事很多" --mode hybrid
 ```
 
 ## 规则实现摘要
