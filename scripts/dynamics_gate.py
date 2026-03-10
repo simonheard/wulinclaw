@@ -132,6 +132,52 @@ def get_all_desires(conn: sqlite3.Connection) -> Dict[str, float]:
     return {r[0]: float(r[1]) for r in rows}
 
 
+def get_user_turn(conn: sqlite3.Connection, chat_id: str) -> int:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS chat_state (
+          chat_id TEXT PRIMARY KEY,
+          user_turn_count INTEGER NOT NULL DEFAULT 0,
+          updated_at REAL NOT NULL
+        )
+        """
+    )
+    row = conn.execute("SELECT user_turn_count FROM chat_state WHERE chat_id=?", (chat_id,)).fetchone()
+    return int(row[0]) if row else 0
+
+
+def bump_user_turn_once(conn: sqlite3.Connection, chat_id: str, event_id: str) -> int:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS event_seen_global (
+          event_id TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          PRIMARY KEY (event_id, kind)
+        )
+        """
+    )
+    if event_id:
+        row = conn.execute(
+            "SELECT 1 FROM event_seen_global WHERE event_id=? AND kind='user_turn'",
+            (event_id,),
+        ).fetchone()
+        if not row:
+            cur = get_user_turn(conn, chat_id)
+            newv = cur + 1
+            now = time.time()
+            conn.execute(
+                """
+                INSERT INTO chat_state(chat_id, user_turn_count, updated_at)
+                VALUES(?,?,?)
+                ON CONFLICT(chat_id) DO UPDATE SET user_turn_count=excluded.user_turn_count, updated_at=excluded.updated_at
+                """,
+                (chat_id, newv, now),
+            )
+            conn.execute("INSERT OR IGNORE INTO event_seen_global(event_id, kind) VALUES(?, 'user_turn')", (event_id,))
+            return newv
+    return get_user_turn(conn, chat_id)
+
+
 def mark_seen(conn: sqlite3.Connection, event_id: str, agent_id: str, kind: str):
     conn.execute(
         "INSERT OR IGNORE INTO event_seen(event_id, agent_id, kind) VALUES(?,?,?)",
@@ -181,8 +227,14 @@ def decide(args):
     desire_before = get_desire(conn, args.agent)
     desire = desire_before
     reasons = []
+    user_turn = None
 
     if args.speaker_type == "user":
+        user_turn = bump_user_turn_once(conn, args.chat_id or "default", args.event_id)
+        phase = cfg.get("user_phase", {})
+        cold_turn_index = int(phase.get("cold_turn_index", 1))
+        phase_mul = float(phase.get("cold_start_multiplier", 1.0)) if user_turn == cold_turn_index else float(phase.get("maintenance_multiplier", 1.0))
+
         if args.event_id and not is_seen(conn, args.event_id, args.agent, "user_recover"):
             cold = cfg.get("cold_start", {})
             if cold.get("enabled", True):
@@ -193,11 +245,12 @@ def decide(args):
                 low_ratio_need = float(cold.get("group_low_ratio", 0.66))
                 low_ratio = sum(1 for v in all_des.values() if v < low_th) / max(1, len(all_des))
                 if low_ratio >= low_ratio_need:
-                    desire += float(cold.get("boost_value", 0.35))
-                    reasons.append("cold_start_boost")
+                    boost = float(cold.get("boost_value", 0.35)) * phase_mul
+                    desire += boost
+                    reasons.append(f"cold_start_boost:{round(boost,4)}")
 
             rec_map = cfg.get("recover_by_user", {})
-            delta = float(rec_map.get(f"{interest}_interest", 0.06))
+            delta = float(rec_map.get(f"{interest}_interest", 0.06)) * phase_mul
             desire += delta
             reasons.append(f"recover_user:{interest}:{delta}")
             mark_seen(conn, args.event_id, args.agent, "user_recover")
@@ -226,6 +279,7 @@ def decide(args):
                     "speaker_agent": args.speaker_agent,
                     "text": args.text,
                     "cfg_hash": cfg_sig,
+                    "user_turn": user_turn,
                     **resp,
                 },
             )
@@ -272,6 +326,7 @@ def decide(args):
             "speaker_agent": args.speaker_agent,
             "text": args.text,
             "cfg_hash": cfg_sig,
+            "user_turn": user_turn,
             **resp,
         },
     )

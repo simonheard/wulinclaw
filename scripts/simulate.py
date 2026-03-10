@@ -79,6 +79,8 @@ def main():
         "来个整活收尾",
     ]
 
+    max_bot_speaks = 120
+
     for um in user_msgs:
         event_num += 1
         eid = f"u-{event_num}"
@@ -89,10 +91,12 @@ def main():
             if r["allow"]:
                 speakers.append((a, r["interest"]))
 
-        # each allowed speaker speaks once, and may trigger others for up to 12 hops
+        # each allowed speaker speaks once, and may trigger others for up to 50 hops
         queue = list(speakers)
         hop = 0
-        while queue and hop < 12:
+        while queue and hop < 50:
+            if sum(1 for x in transcript if x.get("src") == "bot") >= max_bot_speaks:
+                break
             hop += 1
             spk, interest = queue.pop(0)
             event_num += 1

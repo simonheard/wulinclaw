@@ -1,29 +1,34 @@
 {
   "version": "wulin-v1",
   "description": "群聊动力学全局默认参数（管理员基线）",
-  "global_pace": 0.48,
-  "desire_min_to_speak": 0.16,
+  "global_pace": 0.9,
+  "desire_min_to_speak": 0.02,
   "cold_start": {
     "enabled": true,
     "group_low_threshold": 0.18,
     "group_low_ratio": 0.66,
     "boost_once_per_user_message": true,
-    "boost_value": 0.35
+    "boost_value": 0.95
+  },
+  "user_phase": {
+    "cold_turn_index": 1,
+    "cold_start_multiplier": 2.2,
+    "maintenance_multiplier": 0.56
   },
   "recover_by_user": {
-    "high_interest": 0.20,
-    "mid_interest": 0.11,
-    "low_interest": 0.04
+    "high_interest": 0.36,
+    "mid_interest": 0.24,
+    "low_interest": 0.15
   },
   "drop_self_speak": {
-    "high_interest": 0.06,
-    "mid_interest": 0.13,
-    "low_interest": 0.24
+    "high_interest": 0.02,
+    "mid_interest": 0.03,
+    "low_interest": 0.15
   },
   "drop_other_speak": {
-    "high_interest": 0.03,
-    "mid_interest": 0.05,
-    "low_interest": 0.12
+    "high_interest": 0.005,
+    "mid_interest": 0.01,
+    "low_interest": 0.015
   },
   "clamp": {
     "min": 0,

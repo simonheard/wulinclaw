@@ -15,16 +15,16 @@ avoid:
 
 # 郭芙蓉更容易被点燃，也更容易说多后疲劳
 dynamics_override:
-  global_pace: 0.69
+  global_pace: 0.94
   recover_by_user:
     high_interest: 0.26
     mid_interest: 0.15
     low_interest: 0.06
   drop_self_speak:
     high_interest: 0.06
-    mid_interest: 0.13
-    low_interest: 0.20
+    mid_interest: 0.04
+    low_interest: 0.06
   drop_other_speak:
     high_interest: 0.02
-    mid_interest: 0.04
-    low_interest: 0.07
+    mid_interest: 0.03
+    low_interest: 0.01
