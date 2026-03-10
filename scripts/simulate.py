@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import hashlib
 import json
 import random
 import subprocess
@@ -17,6 +18,9 @@ def run(cmd):
 
 
 def decide(agent, speaker_type, speaker_agent, event_id, text):
+    # deterministic seed for reproducible simulation
+    seed_src = f"{agent}|{speaker_type}|{speaker_agent}|{event_id}".encode("utf-8")
+    seed = int(hashlib.sha256(seed_src).hexdigest()[:8], 16)
     cmd = [
         "python3", str(GATE), "--db", str(DB), "decide",
         "--agent", agent,
@@ -24,6 +28,7 @@ def decide(agent, speaker_type, speaker_agent, event_id, text):
         "--speaker-agent", speaker_agent,
         "--event-id", event_id,
         "--text", text,
+        "--seed", str(seed),
     ]
     return run(cmd)
 
@@ -61,6 +66,7 @@ def main():
     transcript = []
 
     # users inject 5 messages; expect chain then fade
+    user_hops = []
     user_msgs = [
         "今天客栈来新人了，江湖消息很多",
         "中午吃什么，谁会做饭",
@@ -95,18 +101,22 @@ def main():
                 if r["allow"]:
                     queue.append((a, r["interest"]))
 
+        user_hops.append(hop)
         transcript.append({"speaker": "user", "src": "user", "text": um, "hop_used": hop})
 
     st = status()
     desires = {x["agent"]: x["desire"] for x in st["agents"]}
     avg_desire = sum(desires.values()) / len(desires)
 
-    # convergence criterion
-    converged = avg_desire < 0.2
+    # convergence criterion: ending phase should naturally cool down
+    # 由于 user 可以随时重新点火，这里定义“收敛”为：后段链长受控且整体欲望低
+    tail_hops = user_hops[-3:] if len(user_hops) >= 3 else user_hops
+    converged = (max(tail_hops) <= 3) and (avg_desire < 0.3)
 
     print(json.dumps({
         "converged": converged,
         "avg_desire": round(avg_desire, 4),
+        "user_hops": user_hops,
         "desires": desires,
         "events": len(transcript),
         "tail": transcript[-20:],

@@ -13,6 +13,9 @@
 - `scripts/dynamics_gate.py`：统一决策与状态更新脚本（概率/欲望不交给 agent 算）
 - `scripts/simulate.py`：快速收敛模拟测试
 - `docs/INTEGRATION.md`：接入说明
+- `docs/DESIGN.md`：完整设计文档（架构/规则/边界）
+- `docs/PARAM_TUNING.md`：调参速查
+- `docs/MISSING_CHECKLIST.md`：落地前缺漏清单
 
 ## alias 映射
 
