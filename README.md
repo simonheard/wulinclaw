@@ -10,6 +10,9 @@
 
 - `chat_dynamics.default.json`：全局动力学参数（管理员统一控制）
 - `agents/*.yaml`：角色基线（人设、兴趣、override）
+- `scripts/dynamics_gate.py`：统一决策与状态更新脚本（概率/欲望不交给 agent 算）
+- `scripts/simulate.py`：快速收敛模拟测试
+- `docs/INTEGRATION.md`：接入说明
 
 ## alias 映射
 
